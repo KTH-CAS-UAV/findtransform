@@ -1,0 +1,35 @@
+#!/usr/bin/env python
+r"""
+Pose Transformer
+
+Republishes a pose from topic `in` into topic `out`.
+
+For example:
+
+    rosrun findtransform pose_transformer \
+           in:=/mycamera/pose \
+           out:=/rigidbody/pose \
+           rigid_body
+"""
+
+from __future__ import print_function, unicode_literals
+import sys
+import rospy
+import numpy as np
+from geometry_msgs.msg import PoseStamped, Point, Quaternion
+from tf import TransformListener
+from tf.transformations import (translation_matrix, translation_from_matrix,
+                                quaternion_matrix, quaternion_from_matrix)
+
+rospy.init_node('pose_transformer', anonymous=True)
+listener = TransformListener()
+
+target_frame, = rospy.myargv()[1:]
+
+def recv(inmsg):
+    pub.publish(listener.transformPose(target_frame, inmsg))
+
+if __name__ == "__main__":
+    sub = rospy.Subscriber('in',  PoseStamped, recv, queue_size=10)
+    pub = rospy.Publisher('out', PoseStamped, queue_size=10)
+    rospy.spin()

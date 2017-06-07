@@ -1,0 +1,114 @@
+#!/usr/bin/env python
+r"""
+Automatic Transformation Finder
+
+This program lets a user determine a transformation between for example a rigid
+body, and a camera tracking algorithm. Suppose the camera pose is provided as a
+ROS topic /mycamera/pose, then the user would start this program thus:
+
+    rosrun findtransform findtransform pose:=/mycamera/pose
+
+The program works by storing the camera's pose as the rigid body is moved to
+some known poses, and then determining the rotation between the two bases. The
+three known poses are, in order:
+
+  1. Origin
+  2. Positive X axis (forward)
+  3. Positive Y axis (left if Z is upwards)
+
+It isn't necessary to return the rigid body to its origin between steps 2 and
+3, but it *is* important to ONLY move it in the Y direction (and similarly to
+only X direction between steps 1 and 2.)
+
+The axes are orthonormalized through the Gram-Schmidt process. This is done by
+normalizing the stored X and Y basis vectors, then removing the Y vector's
+projection on the X vector from the Y vector. The third basis vector Z is
+simply the cross-product of the X and Y axes.
+
+The program prints both rotation matrix and quaternion, for example:
+
+    Quaternion: [ 0.111  0.222 0.333  0.444]
+
+This can be used to publish a static TF transformation, like so:
+
+    rosrun tf static_transform_publisher 0 0 0 0.111 0.222 0.333 0.444 \
+           rigid_body camera 10
+"""
+
+from __future__ import print_function, unicode_literals
+import sys
+import rospy
+import numpy as np
+from geometry_msgs.msg import PoseStamped, Point, Quaternion
+from tf.transformations import quaternion_from_matrix
+
+def wait_pose():
+    global inmsg
+    raw_input()
+    if inmsg is None:
+        raise SystemExit('No pose received! Exiting.')
+    ret, inmsg = inmsg, None
+    print('Got pose in frame', ret.header.frame_id)
+    print(ret.pose)
+    return ret
+
+inmsg = None
+def recv(msg):
+    global inmsg
+    inmsg = msg
+
+def main(f=sys.stdin):
+    rospy.init_node('findtransform', anonymous=True)
+    sub = rospy.Subscriber('pose', PoseStamped, recv, queue_size=1)
+    rate = rospy.Rate(10)
+
+    print(__doc__.strip())
+
+    print()
+    print('Press ENTER when set in origin pose, i.e. the pose from')
+    print('which a positive X and later Y movement will be made.')
+    omsg = wait_pose()
+
+    print()
+    print('Press ENTER when set positive X pose, i.e. only moved')
+    print('in positive X direction.')
+    xmsg = wait_pose()
+
+    print()
+    print('Press ENTER when set positive Y pose, i.e. only moved')
+    print('in positive Y direction.')
+    ymsg = wait_pose()
+
+    assert len(set([m.header.frame_id for m in omsg, xmsg, ymsg])) == 1
+
+    o, x, y = [np.r_[p.x, p.y, p.z] for p in (omsg.pose.position,
+                                              xmsg.pose.position,
+                                              ymsg.pose.position)]
+    x -= o
+    if np.linalg.norm(x) < 1e-5:
+        raise SystemExit('X axis too small after centering. Exiting!')
+    y -= o
+    x /= np.linalg.norm(x)
+    y /= np.linalg.norm(y)
+    y -= np.dot(x, y)*x
+    if np.linalg.norm(y) < 1e-5:
+        raise SystemExit('Y axis too small after orthogonalizing. Exiting!')
+    y /= np.linalg.norm(y)
+    z  = np.cross(x, y)
+
+    R = np.c_[x, y, z]
+    print('R:')
+    print(R)
+    det = np.linalg.det(R)
+    if det < 0:
+        print('Warning! Improper rotation. At least one axis is reflected.')
+        print('Rotation cannot be described as quaternion. Exiting!')
+        raise SystemExit()
+
+    T = np.eye(4)
+    T[:3, :3] = R.T
+    q = quaternion_from_matrix(T)
+    print('Quaternion:', q)
+
+if __name__ == "__main__":
+    main()
